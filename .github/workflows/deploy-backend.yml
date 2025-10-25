@@ -1,0 +1,49 @@
+name: Deploy Backend
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Upload backend source to EC2 (to a temp directory)
+      - name: Upload source to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "."
+          target: "/home/ubuntu/deploy_tmp_backend"
+
+      # Publish on EC2: sync into live dir, install deps, restart service
+      - name: Publish + restart service on EC2
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            # 1) Sync uploaded code into the live backend directory
+            rsync -a --delete /home/ubuntu/deploy_tmp_backend/ /home/ubuntu/project/backend-sample-flask/backend/
+            rm -rf /home/ubuntu/deploy_tmp_backend
+
+            # 2) Ensure venv and dependencies
+            cd /home/ubuntu/project/backend-sample-flask/backend
+            if [ ! -d .venv ]; then python3 -m venv .venv; fi
+            source .venv/bin/activate
+            python -m pip install --upgrade pip
+            if [ -f requirements.txt ]; then
+              pip install -r requirements.txt
+            else
+              pip install flask flask-cors gunicorn
+            fi
+
+            # 3) Restart Gunicorn and reload Nginx
+            sudo systemctl restart flask-gunicorn
+            sudo systemctl reload nginx
